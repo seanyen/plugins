@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package loopback
 
 import (
 	"github.com/containernetworking/cni/pkg/skel"
@@ -67,6 +67,6 @@ func cmdDel(args *skel.CmdArgs) error {
 	return nil
 }
 
-func main() {
+func Main() {
 	skel.PluginMain(cmdAdd, cmdDel, version.All)
 }
