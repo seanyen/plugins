@@ -16,7 +16,7 @@
 // the data from flannel generated subnet file and then invokes a plugin
 // like bridge or ipvlan to do the real work.
 
-package main
+package flannel
 
 import (
 	"bufio"
@@ -231,7 +231,7 @@ func cmdDel(args *skel.CmdArgs) error {
 	return doCmdDel(args, nc)
 }
 
-func main() {
+func Main() {
 	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.All, bv.BuildString("flannel"))
 }
 
