@@ -69,6 +69,9 @@ github.com/d2g/dhcp4client
 github.com/d2g/dhcp4server
 github.com/d2g/dhcp4server/leasepool
 github.com/d2g/dhcp4server/leasepool/memorypool
+# github.com/docker/docker v20.10.12+incompatible
+## explicit
+github.com/docker/docker/pkg/reexec
 # github.com/fsnotify/fsnotify v1.4.9
 ## explicit; go 1.13
 github.com/fsnotify/fsnotify
