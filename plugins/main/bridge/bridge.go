@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package bridge
 
 import (
 	"encoding/json"
@@ -671,7 +671,7 @@ func cmdDel(args *skel.CmdArgs) error {
 	return err
 }
 
-func main() {
+func Main() {
 	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.All, bv.BuildString("bridge"))
 }
 
