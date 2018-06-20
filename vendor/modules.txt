@@ -71,6 +71,9 @@ github.com/d2g/dhcp4client
 github.com/d2g/dhcp4server
 github.com/d2g/dhcp4server/leasepool
 github.com/d2g/dhcp4server/leasepool/memorypool
+# github.com/docker/docker v1.4.2-0.20190924003213-a8608b5b67c7
+## explicit
+github.com/docker/docker/pkg/reexec
 # github.com/fsnotify/fsnotify v1.4.9
 ## explicit; go 1.13
 github.com/fsnotify/fsnotify
