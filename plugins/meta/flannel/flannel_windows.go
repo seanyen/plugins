@@ -16,18 +16,19 @@
 // the data from flannel generated subnet file and then invokes a plugin
 // like bridge or ipvlan to do the real work.
 
-package main
+package flannel
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+
 	"github.com/containernetworking/cni/pkg/invoke"
 	"github.com/containernetworking/cni/pkg/skel"
 	"github.com/containernetworking/cni/pkg/types"
 	"github.com/containernetworking/cni/pkg/types/020"
 	"github.com/containernetworking/plugins/pkg/hns"
-	"os"
 )
 
 func doCmdAdd(args *skel.CmdArgs, n *NetConf, fenv *subnetEnv) error {
