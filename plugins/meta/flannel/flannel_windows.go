@@ -16,7 +16,7 @@
 // the data from flannel generated subnet file and then invokes a plugin
 // like bridge or ipvlan to do the real work.
 
-package main
+package flannel
 
 import (
 	"context"
