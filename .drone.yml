@@ -22,6 +22,8 @@ steps:
       files:
         - bin/portmap-amd64
     when:
+      instance:
+        - drone-publish.rancher.io
       event: tag
 ---
 kind: pipeline
@@ -48,4 +50,6 @@ steps:
       files:
         - bin/portmap-arm64
     when:
+      instance:
+        - drone-publish.rancher.io
       event: tag
