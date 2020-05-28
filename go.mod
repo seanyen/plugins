@@ -14,6 +14,7 @@ require (
 	github.com/d2g/dhcp4client v1.0.0
 	github.com/d2g/dhcp4server v0.0.0-20181031114812-7d4a0a7f59a5
 	github.com/d2g/hardwareaddr v0.0.0-20190221164911-e7d9fbe030e4 // indirect
+	github.com/docker/docker v1.13.1
 	github.com/godbus/dbus v0.0.0-20180201030542-885f9cc04c9c
 	github.com/golang/protobuf v1.3.1 // indirect
 	github.com/j-keck/arping v0.0.0-20160618110441-2cf9dc699c56
