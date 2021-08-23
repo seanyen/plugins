@@ -57,6 +57,9 @@ github.com/d2g/dhcp4server/leasepool
 github.com/d2g/dhcp4server/leasepool/memorypool
 # github.com/d2g/hardwareaddr v0.0.0-20190221164911-e7d9fbe030e4
 ## explicit
+# github.com/docker/docker v20.10.8+incompatible
+## explicit
+github.com/docker/docker/pkg/reexec
 # github.com/fsnotify/fsnotify v1.4.7
 github.com/fsnotify/fsnotify
 # github.com/godbus/dbus v0.0.0-20180201030542-885f9cc04c9c
@@ -170,3 +173,5 @@ golang.org/x/xerrors/internal
 gopkg.in/tomb.v1
 # gopkg.in/yaml.v2 v2.3.0
 gopkg.in/yaml.v2
+# gotest.tools/v3 v3.0.3
+## explicit

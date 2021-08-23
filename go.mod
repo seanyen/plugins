@@ -14,6 +14,7 @@ require (
 	github.com/d2g/dhcp4client v1.0.0
 	github.com/d2g/dhcp4server v0.0.0-20181031114812-7d4a0a7f59a5
 	github.com/d2g/hardwareaddr v0.0.0-20190221164911-e7d9fbe030e4 // indirect
+	github.com/docker/docker v20.10.8+incompatible
 	github.com/godbus/dbus v0.0.0-20180201030542-885f9cc04c9c
 	github.com/j-keck/arping v0.0.0-20160618110441-2cf9dc699c56
 	github.com/mattn/go-shellwords v1.0.3
@@ -26,4 +27,5 @@ require (
 	golang.org/x/sys v0.0.0-20201117170446-d9b008d0a637
 	gopkg.in/airbrake/gobrake.v2 v2.0.9 // indirect
 	gopkg.in/gemnasium/logrus-airbrake-hook.v2 v2.1.2 // indirect
+	gotest.tools/v3 v3.0.3 // indirect
 )
