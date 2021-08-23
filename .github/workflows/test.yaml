@@ -27,43 +27,43 @@ jobs:
             rm bin/*
           done
 
-  test-linux:
-    name: Run tests on Linux amd64
-    runs-on: ubuntu-latest
-    steps:
-      - name: setup go
-        uses: actions/setup-go@v1
-        with:
-          go-version: ${{ env.GO_VERSION }}
-      - uses: actions/checkout@v2
+#  test-linux:
+#    name: Run tests on Linux amd64
+#    runs-on: ubuntu-latest
+#    steps:
+#      - name: setup go
+#        uses: actions/setup-go@v1
+#        with:
+#          go-version: ${{ env.GO_VERSION }}
+#      - uses: actions/checkout@v2
+#
+#      - name: Install test binaries
+#        env:
+#          GO111MODULE: off
+#        run: |
+#          go get github.com/containernetworking/cni/cnitool
+#          go get github.com/mattn/goveralls
+#          go get github.com/modocache/gover
+#
+#      - name: test
+#        run: PATH=$PATH:$(go env GOPATH)/bin COVERALLS=1 ./test_linux.sh
+#
+#      - name: Send coverage to coveralls
+#        env:
+#          COVERALLS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#        run: |
+#          PATH=$PATH:$(go env GOPATH)/bin
+#          gover
+#          goveralls -coverprofile=gover.coverprofile -service=github
 
-      - name: Install test binaries
-        env:
-          GO111MODULE: off
-        run: |
-          go get github.com/containernetworking/cni/cnitool
-          go get github.com/mattn/goveralls
-          go get github.com/modocache/gover
-
-      - name: test
-        run: PATH=$PATH:$(go env GOPATH)/bin COVERALLS=1 ./test_linux.sh
-
-      - name: Send coverage to coveralls
-        env:
-          COVERALLS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          PATH=$PATH:$(go env GOPATH)/bin
-          gover
-          goveralls -coverprofile=gover.coverprofile -service=github
-
-  test-win:
-    name: Build and run tests on Windows
-    runs-on: windows-latest
-    steps:
-      - name: setup go
-        uses: actions/setup-go@v1
-        with:
-          go-version: ${{ env.GO_VERSION }}
-      - uses: actions/checkout@v2
-      - name: test
-        run: bash ./test_windows.sh
+#  test-win:
+#    name: Build and run tests on Windows
+#    runs-on: windows-latest
+#    steps:
+#      - name: setup go
+#        uses: actions/setup-go@v1
+#        with:
+#          go-version: ${{ env.GO_VERSION }}
+#      - uses: actions/checkout@v2
+#      - name: test
+#        run: bash ./test_windows.sh
