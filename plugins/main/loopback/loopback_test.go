@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main_test
+package loopback_test
 
 import (
 	"fmt"
@@ -45,21 +45,20 @@ var _ = Describe("Loopback", func() {
 		environ = []string{
 			fmt.Sprintf("CNI_CONTAINERID=%s", "dummy"),
 			fmt.Sprintf("CNI_NETNS=%s", networkNS.Path()),
-			fmt.Sprintf("CNI_IFNAME=%s", "this is ignored"),
+			fmt.Sprintf("CNI_IFNAME=%s", "lo"),
 			fmt.Sprintf("CNI_ARGS=%s", "none"),
 			fmt.Sprintf("CNI_PATH=%s", "/some/test/path"),
 		}
-		command.Stdin = strings.NewReader(`{ "cniVersion": "0.1.0" }`)
+		command.Stdin = strings.NewReader(`{ "name": "loopback-test", "cniVersion": "0.1.0" }`)
 	})
 
 	AfterEach(func() {
 		Expect(networkNS.Close()).To(Succeed())
+		Expect(testutils.UnmountNS(networkNS)).To(Succeed())
 	})
 
 	Context("when given a network namespace", func() {
 		It("sets the lo device to UP", func() {
-
-			Skip("TODO: add network name")
 			command.Env = append(environ, fmt.Sprintf("CNI_COMMAND=%s", "ADD"))
 
 			session, err := gexec.Start(command, GinkgoWriter, GinkgoWriter)
@@ -80,8 +79,6 @@ var _ = Describe("Loopback", func() {
 		})
 
 		It("sets the lo device to DOWN", func() {
-
-			Skip("TODO: add network name")
 			command.Env = append(environ, fmt.Sprintf("CNI_COMMAND=%s", "DEL"))
 
 			session, err := gexec.Start(command, GinkgoWriter, GinkgoWriter)

@@ -22,11 +22,13 @@ import (
 	"net/rpc"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/containernetworking/cni/pkg/skel"
 	"github.com/containernetworking/cni/pkg/types"
 	"github.com/containernetworking/cni/pkg/types/current"
 	"github.com/containernetworking/cni/pkg/version"
+	bv "github.com/containernetworking/plugins/pkg/utils/buildversion"
 )
 
 const defaultSocketPath = "/run/cni/dhcp.sock"
@@ -36,23 +38,26 @@ func main() {
 		var pidfilePath string
 		var hostPrefix string
 		var socketPath string
+		var broadcast bool
+		var timeout time.Duration
 		daemonFlags := flag.NewFlagSet("daemon", flag.ExitOnError)
 		daemonFlags.StringVar(&pidfilePath, "pidfile", "", "optional path to write daemon PID to")
-		daemonFlags.StringVar(&hostPrefix, "hostprefix", "", "optional prefix to netns")
+		daemonFlags.StringVar(&hostPrefix, "hostprefix", "", "optional prefix to host root")
 		daemonFlags.StringVar(&socketPath, "socketpath", "", "optional dhcp server socketpath")
+		daemonFlags.BoolVar(&broadcast, "broadcast", false, "broadcast DHCP leases")
+		daemonFlags.DurationVar(&timeout, "timeout", 10*time.Second, "optional dhcp client timeout duration")
 		daemonFlags.Parse(os.Args[2:])
 
 		if socketPath == "" {
 			socketPath = defaultSocketPath
 		}
 
-		if err := runDaemon(pidfilePath, hostPrefix, socketPath); err != nil {
+		if err := runDaemon(pidfilePath, hostPrefix, socketPath, timeout, broadcast); err != nil {
 			log.Printf(err.Error())
 			os.Exit(1)
 		}
 	} else {
-		// TODO: implement plugin version
-		skel.PluginMain(cmdAdd, cmdGet, cmdDel, version.All, "TODO")
+		skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.All, bv.BuildString("dhcp"))
 	}
 }
 
@@ -80,9 +85,23 @@ func cmdDel(args *skel.CmdArgs) error {
 	return nil
 }
 
-func cmdGet(args *skel.CmdArgs) error {
+func cmdCheck(args *skel.CmdArgs) error {
 	// TODO: implement
-	return fmt.Errorf("not implemented")
+	//return fmt.Errorf("not implemented")
+	// Plugin must return result in same version as specified in netconf
+	versionDecoder := &version.ConfigDecoder{}
+	//confVersion, err := versionDecoder.Decode(args.StdinData)
+	_, err := versionDecoder.Decode(args.StdinData)
+	if err != nil {
+		return err
+	}
+
+	result := &current.Result{}
+	if err := rpcCall("DHCP.Allocate", args, result); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 type SocketPathConf struct {

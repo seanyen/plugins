@@ -12,16 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package portmap
 
 import (
 	"fmt"
 	"net"
 	"sort"
 	"strconv"
+	"strings"
 
+	"github.com/containernetworking/plugins/pkg/utils"
 	"github.com/containernetworking/plugins/pkg/utils/sysctl"
 	"github.com/coreos/go-iptables/iptables"
+	"github.com/vishvananda/netlink"
 )
 
 // This creates the chains to be added to iptables. The basic structure is
@@ -41,15 +44,17 @@ import (
 // The names of the top-level summary chains.
 // These should never be changed, or else upgrading will require manual
 // intervention.
-const TopLevelDNATChainName = "CNI-HOSTPORT-DNAT"
-const SetMarkChainName = "CNI-HOSTPORT-SETMARK"
-const MarkMasqChainName = "CNI-HOSTPORT-MASQ"
-const OldTopLevelSNATChainName = "CNI-HOSTPORT-SNAT"
+const (
+	TopLevelDNATChainName    = "CNI-HOSTPORT-DNAT"
+	SetMarkChainName         = "CNI-HOSTPORT-SETMARK"
+	MarkMasqChainName        = "CNI-HOSTPORT-MASQ"
+	OldTopLevelSNATChainName = "CNI-HOSTPORT-SNAT"
+)
 
 // forwardPorts establishes port forwarding to a given container IP.
-// containerIP can be either v4 or v6.
-func forwardPorts(config *PortMapConf, containerIP net.IP) error {
-	isV6 := (containerIP.To4() == nil)
+// containerNet.IP can be either v4 or v6.
+func forwardPorts(config *PortMapConf, containerNet net.IPNet) error {
+	isV6 := (containerNet.IP.To4() == nil)
 
 	var ipt *iptables.IPTables
 	var err error
@@ -85,7 +90,7 @@ func forwardPorts(config *PortMapConf, containerIP net.IP) error {
 		if !isV6 {
 			// Set the route_localnet bit on the host interface, so that
 			// 127/8 can cross a routing boundary.
-			hostIfName := getRoutableHostIF(containerIP)
+			hostIfName := getRoutableHostIF(containerNet.IP)
 			if hostIfName != "" {
 				if err := enableLocalnetRouting(hostIfName); err != nil {
 					return fmt.Errorf("unable to enable route_localnet: %v", err)
@@ -103,9 +108,48 @@ func forwardPorts(config *PortMapConf, containerIP net.IP) error {
 	dnatChain := genDnatChain(config.Name, config.ContainerID)
 	// First, idempotently tear down this chain in case there was some
 	// sort of collision or bad state.
-	fillDnatRules(&dnatChain, config, containerIP)
+	fillDnatRules(&dnatChain, config, containerNet)
 	if err := dnatChain.setup(ipt); err != nil {
 		return fmt.Errorf("unable to setup DNAT: %v", err)
+	}
+
+	return nil
+}
+
+func checkPorts(config *PortMapConf, containerNet net.IPNet) error {
+	dnatChain := genDnatChain(config.Name, config.ContainerID)
+	fillDnatRules(&dnatChain, config, containerNet)
+
+	ip4t := maybeGetIptables(false)
+	ip6t := maybeGetIptables(true)
+	if ip4t == nil && ip6t == nil {
+		return fmt.Errorf("neither iptables nor ip6tables usable")
+	}
+
+	if ip4t != nil {
+		exists, err := utils.ChainExists(ip4t, dnatChain.table, dnatChain.name)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return err
+		}
+		if err := dnatChain.check(ip4t); err != nil {
+			return fmt.Errorf("could not check ipv4 dnat: %v", err)
+		}
+	}
+
+	if ip6t != nil {
+		exists, err := utils.ChainExists(ip6t, dnatChain.table, dnatChain.name)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return err
+		}
+		if err := dnatChain.check(ip6t); err != nil {
+			return fmt.Errorf("could not check ipv6 dnat: %v", err)
+		}
 	}
 
 	return nil
@@ -132,15 +176,15 @@ func genToplevelDnatChain() chain {
 func genDnatChain(netName, containerID string) chain {
 	return chain{
 		table:       "nat",
-		name:        formatChainName("DN-", netName, containerID),
+		name:        utils.MustFormatChainNameWithPrefix(netName, containerID, "DN-"),
 		entryChains: []string{TopLevelDNATChainName},
 	}
 }
 
 // dnatRules generates the destination NAT rules, one per port, to direct
 // traffic from hostip:hostport to podip:podport
-func fillDnatRules(c *chain, config *PortMapConf, containerIP net.IP) {
-	isV6 := (containerIP.To4() == nil)
+func fillDnatRules(c *chain, config *PortMapConf, containerNet net.IPNet) {
+	isV6 := (containerNet.IP.To4() == nil)
 	comment := trimComment(fmt.Sprintf(`dnat name: "%s" id: "%s"`, config.Name, config.ContainerID))
 	entries := config.RuntimeConfig.PortMaps
 	setMarkChainName := SetMarkChainName
@@ -148,7 +192,7 @@ func fillDnatRules(c *chain, config *PortMapConf, containerIP net.IP) {
 		setMarkChainName = *config.ExternalSetMarkChain
 	}
 
-	//Generate the dnat entry rules. We'll use multiport, but it ony accepts
+	// Generate the dnat entry rules. We'll use multiport, but it ony accepts
 	// up to 15 rules, so partition the list if needed.
 	// Do it in a stable order for testing
 	protoPorts := groupByProto(entries)
@@ -183,10 +227,28 @@ func fillDnatRules(c *chain, config *PortMapConf, containerIP net.IP) {
 	// the ordering is important here; the mark rules must be first.
 	c.rules = make([][]string, 0, 3*len(entries))
 	for _, entry := range entries {
+		// If a HostIP is given, only process the entry if host and container address families match
+		// and append it to the iptables rules
+		addRuleBaseDst := false
+		if entry.HostIP != "" {
+			hostIP := net.ParseIP(entry.HostIP)
+			isHostV6 := (hostIP.To4() == nil)
+
+			if isV6 != isHostV6 {
+				continue
+			}
+
+			// Unspecified addresses can not be used as destination
+			if !hostIP.IsUnspecified() {
+				addRuleBaseDst = true
+			}
+		}
+
 		ruleBase := []string{
 			"-p", entry.Protocol,
-			"--dport", strconv.Itoa(entry.HostPort)}
-		if entry.HostIP != "" {
+			"--dport", strconv.Itoa(entry.HostPort),
+		}
+		if addRuleBaseDst {
 			ruleBase = append(ruleBase,
 				"-d", entry.HostIP)
 		}
@@ -198,7 +260,7 @@ func fillDnatRules(c *chain, config *PortMapConf, containerIP net.IP) {
 			copy(hpRule, ruleBase)
 
 			hpRule = append(hpRule,
-				"-s", containerIP.String(),
+				"-s", containerNet.String(),
 				"-j", setMarkChainName,
 			)
 			c.rules = append(c.rules, hpRule)
@@ -221,7 +283,7 @@ func fillDnatRules(c *chain, config *PortMapConf, containerIP net.IP) {
 		copy(dnatRule, ruleBase)
 		dnatRule = append(dnatRule,
 			"-j", "DNAT",
-			"--to-destination", fmtIpPort(containerIP, entry.ContainerPort),
+			"--to-destination", fmtIpPort(containerNet.IP, entry.ContainerPort),
 		)
 		c.rules = append(c.rules, dnatRule)
 	}
@@ -255,6 +317,10 @@ func genMarkMasqChain(markBit int) chain {
 		table:       "nat",
 		name:        MarkMasqChainName,
 		entryChains: []string{"POSTROUTING"},
+		// Only this entry chain needs to be prepended, because otherwise it is
+		// stomped on by the masquerading rules created by the CNI ptp and bridge
+		// plugins.
+		prependEntry: true,
 		entryRules: [][]string{{
 			"-m", "comment",
 			"--comment", "CNI portfwd requiring masquerade",
@@ -279,11 +345,9 @@ func enableLocalnetRouting(ifName string) error {
 // genOldSnatChain is no longer used, but used to be created. We'll try and
 // tear it down in case the plugin version changed between ADD and DEL
 func genOldSnatChain(netName, containerID string) chain {
-	name := formatChainName("SN-", netName, containerID)
-
 	return chain{
 		table:       "nat",
-		name:        name,
+		name:        utils.MustFormatChainNameWithPrefix(netName, containerID, "SN-"),
 		entryChains: []string{OldTopLevelSNATChainName},
 	}
 }
@@ -345,4 +409,20 @@ func maybeGetIptables(isV6 bool) *iptables.IPTables {
 	}
 
 	return ipt
+}
+
+// deletePortmapStaleConnections delete the UDP conntrack entries on the specified IP family
+// from the ports mapped to the container
+func deletePortmapStaleConnections(portMappings []PortMapEntry, family netlink.InetFamily) error {
+	for _, pm := range portMappings {
+		// skip if is not UDP
+		if strings.ToLower(pm.Protocol) != "udp" {
+			continue
+		}
+		err := utils.DeleteConntrackEntriesForDstPort(uint16(pm.HostPort), utils.PROTOCOL_UDP, family)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

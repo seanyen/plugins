@@ -20,15 +20,18 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/juju/errors"
-
 	"github.com/Microsoft/hcsshim"
+	"github.com/Microsoft/hcsshim/hcn"
+
 	"github.com/containernetworking/cni/pkg/skel"
 	"github.com/containernetworking/cni/pkg/types"
 	"github.com/containernetworking/cni/pkg/types/current"
 	"github.com/containernetworking/cni/pkg/version"
+
+	"github.com/containernetworking/plugins/pkg/errors"
 	"github.com/containernetworking/plugins/pkg/hns"
 	"github.com/containernetworking/plugins/pkg/ipam"
+	bv "github.com/containernetworking/plugins/pkg/utils/buildversion"
 )
 
 type NetConf struct {
@@ -52,30 +55,12 @@ func loadNetConf(bytes []byte) (*NetConf, string, error) {
 	return n, n.CNIVersion, nil
 }
 
-func cmdAdd(args *skel.CmdArgs) error {
-	n, cniVersion, err := loadNetConf(args.StdinData)
-	if err != nil {
-		return errors.Annotate(err, "error while loadNetConf")
-	}
-
-	networkName := n.Name
-	hnsNetwork, err := hcsshim.GetHNSNetworkByName(networkName)
-	if err != nil {
-		return errors.Annotatef(err, "error while GETHNSNewtorkByName(%s)", networkName)
-	}
-
-	if hnsNetwork == nil {
-		return fmt.Errorf("network %v not found", networkName)
-	}
-
-	if !strings.EqualFold(hnsNetwork.Type, "L2Bridge") {
-		return fmt.Errorf("network %v is of an unexpected type: %v", networkName, hnsNetwork.Type)
-	}
-
-	epName := hns.ConstructEndpointName(args.ContainerID, args.Netns, n.Name)
-
-	hnsEndpoint, err := hns.ProvisionEndpoint(epName, hnsNetwork.Id, args.ContainerID, func() (*hcsshim.HNSEndpoint, error) {
-		// run the IPAM plugin and get back the config to apply
+func ProcessEndpointArgs(args *skel.CmdArgs, n *NetConf) (*hns.EndpointInfo, error) {
+	epInfo := new(hns.EndpointInfo)
+	epInfo.NetworkName = n.Name
+	epInfo.EndpointName = hns.ConstructEndpointName(args.ContainerID, args.Netns, epInfo.NetworkName)
+	// It's not necessary to have have an IPAM in windows as hns can provide IP/GW
+	if n.IPAM.Type != "" {
 		r, err := ipam.ExecAdd(n.IPAM.Type, args.StdinData)
 		if err != nil {
 			return nil, errors.Annotatef(err, "error while ipam.ExecAdd")
@@ -85,44 +70,133 @@ func cmdAdd(args *skel.CmdArgs) error {
 		result, err := current.NewResultFromResult(r)
 		if err != nil {
 			return nil, errors.Annotatef(err, "error while NewResultFromResult")
+		} else {
+			if len(result.IPs) == 0 {
+				return nil, fmt.Errorf("IPAM plugin return is missing IP config")
+			}
+			epInfo.IpAddress = result.IPs[0].Address.IP
+			epInfo.Gateway = result.IPs[0].Address.IP.Mask(result.IPs[0].Address.Mask)
+
+			// Calculate gateway for bridge network (needs to be x.2)
+			epInfo.Gateway[len(epInfo.Gateway)-1] += 2
 		}
+	}
+	// NAT based on the the configured cluster network
+	if len(n.IPMasqNetwork) != 0 {
+		n.ApplyOutboundNatPolicy(n.IPMasqNetwork)
+	}
 
-		if len(result.IPs) == 0 {
-			return nil, errors.New("IPAM plugin return is missing IP config")
+	// Add HostPort mapping if any present
+	n.ApplyPortMappingPolicy(n.RuntimeConfig.PortMaps)
+
+	epInfo.DNS = n.GetDNS()
+
+	return epInfo, nil
+}
+
+func cmdHnsAdd(args *skel.CmdArgs, n *NetConf) (*current.Result, error) {
+	networkName := n.Name
+	hnsNetwork, err := hcsshim.GetHNSNetworkByName(networkName)
+	if err != nil {
+		return nil, errors.Annotatef(err, "error while GETHNSNewtorkByName(%s)", networkName)
+	}
+
+	if hnsNetwork == nil {
+		return nil, fmt.Errorf("network %v not found", networkName)
+	}
+
+	if !strings.EqualFold(hnsNetwork.Type, "L2Bridge") && !strings.EqualFold(hnsNetwork.Type, "L2Tunnel") {
+		return nil, fmt.Errorf("network %v is of an unexpected type: %v", networkName, hnsNetwork.Type)
+	}
+
+	epName := hns.ConstructEndpointName(args.ContainerID, args.Netns, n.Name)
+	hnsEndpoint, err := hns.ProvisionEndpoint(epName, hnsNetwork.Id, args.ContainerID, args.Netns, func() (*hcsshim.HNSEndpoint, error) {
+		epInfo, err := ProcessEndpointArgs(args, n)
+		epInfo.NetworkId = hnsNetwork.Id
+		if err != nil {
+			return nil, errors.Annotatef(err, "error while ProcessEndpointArgs")
 		}
-
-		// Calculate gateway for bridge network (needs to be x.2)
-		gw := result.IPs[0].Address.IP.Mask(result.IPs[0].Address.Mask)
-		gw[len(gw)-1] += 2
-
-		// NAT based on the the configured cluster network
-		if len(n.IPMasqNetwork) != 0 {
-			n.ApplyOutboundNatPolicy(n.IPMasqNetwork)
+		hnsEndpoint, err := hns.GenerateHnsEndpoint(epInfo, &n.NetConf)
+		if err != nil {
+			return nil, errors.Annotatef(err, "error while GenerateHnsEndpoint")
 		}
-
-		result.DNS = n.DNS
-
-		hnsEndpoint := &hcsshim.HNSEndpoint{
-			Name:           epName,
-			VirtualNetwork: hnsNetwork.Id,
-			DNSServerList:  strings.Join(result.DNS.Nameservers, ","),
-			DNSSuffix:      strings.Join(result.DNS.Search, ","),
-			GatewayAddress: gw.String(),
-			IPAddress:      result.IPs[0].Address.IP,
-			Policies:       n.MarshalPolicies(),
-		}
-
 		return hnsEndpoint, nil
 	})
 	if err != nil {
-		return errors.Annotatef(err, "error while ProvisionEndpoint(%v,%v,%v)", epName, hnsNetwork.Id, args.ContainerID)
+		return nil, errors.Annotatef(err, "error while ProvisionEndpoint(%v,%v,%v)", epName, hnsNetwork.Id, args.ContainerID)
 	}
 
 	result, err := hns.ConstructResult(hnsNetwork, hnsEndpoint)
 	if err != nil {
-		return errors.Annotatef(err, "error while constructResult")
+		return nil, errors.Annotatef(err, "error while constructResult")
 	}
 
+	return result, nil
+}
+
+func cmdHcnAdd(args *skel.CmdArgs, n *NetConf) (*current.Result, error) {
+	networkName := n.Name
+	hcnNetwork, err := hcn.GetNetworkByName(networkName)
+	if err != nil {
+		return nil, errors.Annotatef(err, "error while GetNetworkByName(%s)", networkName)
+	}
+
+	if hcnNetwork == nil {
+		return nil, fmt.Errorf("network %v not found", networkName)
+	}
+
+	if hcnNetwork.Type != hcn.L2Bridge && hcnNetwork.Type != hcn.L2Tunnel {
+		return nil, fmt.Errorf("network %v is of unexpected type: %v", networkName, hcnNetwork.Type)
+	}
+
+	epName := hns.ConstructEndpointName(args.ContainerID, args.Netns, n.Name)
+
+	hcnEndpoint, err := hns.AddHcnEndpoint(epName, hcnNetwork.Id, args.Netns, func() (*hcn.HostComputeEndpoint, error) {
+		epInfo, err := ProcessEndpointArgs(args, n)
+		if err != nil {
+			return nil, errors.Annotatef(err, "error while ProcessEndpointArgs")
+		}
+		epInfo.NetworkId = hcnNetwork.Id
+
+		hcnEndpoint, err := hns.GenerateHcnEndpoint(epInfo, &n.NetConf)
+		if err != nil {
+			return nil, errors.Annotatef(err, "error while GenerateHcnEndpoint")
+		}
+		return hcnEndpoint, nil
+	})
+	if err != nil {
+		return nil, errors.Annotatef(err, "error while AddHcnEndpoint(%v,%v,%v)", epName, hcnNetwork.Id, args.Netns)
+	}
+
+	result, err := hns.ConstructHcnResult(hcnNetwork, hcnEndpoint)
+	if err != nil {
+		return nil, errors.Annotatef(err, "error while ConstructHcnResult")
+	}
+
+	return result, nil
+}
+
+func cmdAdd(args *skel.CmdArgs) error {
+	n, cniVersion, err := loadNetConf(args.StdinData)
+	if err != nil {
+		return errors.Annotate(err, "error while loadNetConf")
+	}
+
+	var result *current.Result
+	if n.ApiVersion == 2 {
+		result, err = cmdHcnAdd(args, n)
+	} else {
+		result, err = cmdHnsAdd(args, n)
+	}
+
+	if err != nil {
+		ipam.ExecDel(n.IPAM.Type, args.StdinData)
+		return errors.Annotate(err, "error while executing ADD command")
+	}
+
+	if result == nil {
+		return fmt.Errorf("result for ADD not populated correctly")
+	}
 	return types.PrintResult(result, cniVersion)
 }
 
@@ -132,20 +206,25 @@ func cmdDel(args *skel.CmdArgs) error {
 		return err
 	}
 
-	if err := ipam.ExecDel(n.IPAM.Type, args.StdinData); err != nil {
-		return err
+	if n.IPAM.Type != "" {
+		if err := ipam.ExecDel(n.IPAM.Type, args.StdinData); err != nil {
+			return err
+		}
 	}
-
 	epName := hns.ConstructEndpointName(args.ContainerID, args.Netns, n.Name)
 
-	return hns.DeprovisionEndpoint(epName, args.Netns, args.ContainerID)
+	if n.ApiVersion == 2 {
+		return hns.RemoveHcnEndpoint(epName)
+	} else {
+		return hns.DeprovisionEndpoint(epName, args.Netns, args.ContainerID)
+	}
 }
 
-func cmdGet(_ *skel.CmdArgs) error {
+func cmdCheck(_ *skel.CmdArgs) error {
 	// TODO: implement
-	return fmt.Errorf("not implemented")
+	return nil
 }
 
 func main() {
-	skel.PluginMain(cmdAdd, cmdGet, cmdDel, version.All, "TODO")
+	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.PluginSupports("0.1.0", "0.2.0", "0.3.0"), bv.BuildString("win-bridge"))
 }

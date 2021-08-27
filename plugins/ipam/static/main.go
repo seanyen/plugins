@@ -22,10 +22,10 @@ import (
 
 	"github.com/containernetworking/cni/pkg/skel"
 	"github.com/containernetworking/cni/pkg/types"
+	types020 "github.com/containernetworking/cni/pkg/types/020"
 	"github.com/containernetworking/cni/pkg/types/current"
 	"github.com/containernetworking/cni/pkg/version"
-
-	types020 "github.com/containernetworking/cni/pkg/types/020"
+	bv "github.com/containernetworking/plugins/pkg/utils/buildversion"
 )
 
 // The top-level network config - IPAM plugins are passed the full configuration
@@ -34,6 +34,13 @@ type Net struct {
 	Name       string      `json:"name"`
 	CNIVersion string      `json:"cniVersion"`
 	IPAM       *IPAMConfig `json:"ipam"`
+
+	RuntimeConfig struct {
+		IPs []string `json:"ips,omitempty"`
+	} `json:"runtimeConfig,omitempty"`
+	Args *struct {
+		A *IPAMArgs `json:"cni"`
+	} `json:"args"`
 }
 
 type IPAMConfig struct {
@@ -50,6 +57,10 @@ type IPAMEnvArgs struct {
 	GATEWAY types.UnmarshallableString `json:"gateway,omitempty"`
 }
 
+type IPAMArgs struct {
+	IPs []string `json:"ips"`
+}
+
 type Address struct {
 	AddressStr string `json:"address"`
 	Gateway    net.IP `json:"gateway,omitempty"`
@@ -58,13 +69,59 @@ type Address struct {
 }
 
 func main() {
-	// TODO: implement plugin version
-	skel.PluginMain(cmdAdd, cmdGet, cmdDel, version.All, "TODO")
+	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.All, bv.BuildString("static"))
 }
 
-func cmdGet(args *skel.CmdArgs) error {
-	// TODO: implement
-	return fmt.Errorf("not implemented")
+func loadNetConf(bytes []byte) (*types.NetConf, string, error) {
+	n := &types.NetConf{}
+	if err := json.Unmarshal(bytes, n); err != nil {
+		return nil, "", fmt.Errorf("failed to load netconf: %v", err)
+	}
+	return n, n.CNIVersion, nil
+}
+
+func cmdCheck(args *skel.CmdArgs) error {
+	ipamConf, _, err := LoadIPAMConfig(args.StdinData, args.Args)
+	if err != nil {
+		return err
+	}
+
+	// Get PrevResult from stdin... store in RawPrevResult
+	n, _, err := loadNetConf(args.StdinData)
+	if err != nil {
+		return err
+	}
+
+	// Parse previous result.
+	if n.RawPrevResult == nil {
+		return fmt.Errorf("Required prevResult missing")
+	}
+
+	if err := version.ParsePrevResult(n); err != nil {
+		return err
+	}
+
+	result, err := current.NewResultFromResult(n.PrevResult)
+	if err != nil {
+		return err
+	}
+
+	// Each configured IP should be found in result.IPs
+	for _, rangeset := range ipamConf.Addresses {
+		for _, ips := range result.IPs {
+			// Ensure values are what we expect
+			if rangeset.Address.IP.Equal(ips.Address.IP) {
+				if rangeset.Gateway == nil {
+					break
+				} else if rangeset.Gateway.Equal(ips.Gateway) {
+					break
+				}
+				return fmt.Errorf("static: Failed to match addr %v on interface %v", ips.Address.IP, args.IfName)
+			}
+		}
+	}
+
+	return nil
 }
 
 // canonicalizeIP makes sure a provided ip is in standard form
@@ -86,6 +143,65 @@ func LoadIPAMConfig(bytes []byte, envArgs string) (*IPAMConfig, string, error) {
 	n := Net{}
 	if err := json.Unmarshal(bytes, &n); err != nil {
 		return nil, "", err
+	}
+
+	// load IP from CNI_ARGS
+	if envArgs != "" {
+		e := IPAMEnvArgs{}
+		err := types.LoadArgs(envArgs, &e)
+		if err != nil {
+			return nil, "", err
+		}
+
+		if e.IP != "" {
+			for _, item := range strings.Split(string(e.IP), ",") {
+				ipstr := strings.TrimSpace(item)
+
+				ip, subnet, err := net.ParseCIDR(ipstr)
+				if err != nil {
+					return nil, "", fmt.Errorf("invalid CIDR %s: %s", ipstr, err)
+				}
+
+				addr := Address{
+					Address:    net.IPNet{IP: ip, Mask: subnet.Mask},
+					AddressStr: ipstr,
+				}
+				n.IPAM.Addresses = append(n.IPAM.Addresses, addr)
+			}
+		}
+
+		if e.GATEWAY != "" {
+			for _, item := range strings.Split(string(e.GATEWAY), ",") {
+				gwip := net.ParseIP(strings.TrimSpace(item))
+				if gwip == nil {
+					return nil, "", fmt.Errorf("invalid gateway address: %s", item)
+				}
+
+				for i := range n.IPAM.Addresses {
+					if n.IPAM.Addresses[i].Address.Contains(gwip) {
+						n.IPAM.Addresses[i].Gateway = gwip
+					}
+				}
+			}
+		}
+	}
+
+	// import address from args
+	if n.Args != nil && n.Args.A != nil && len(n.Args.A.IPs) != 0 {
+		// args IP overwrites IP, so clear IPAM Config
+		n.IPAM.Addresses = make([]Address, 0, len(n.Args.A.IPs))
+		for _, addr := range n.Args.A.IPs {
+			n.IPAM.Addresses = append(n.IPAM.Addresses, Address{AddressStr: addr})
+		}
+	}
+
+	// import address from runtimeConfig
+	if len(n.RuntimeConfig.IPs) != 0 {
+		// runtimeConfig IP overwrites IP, so clear IPAM Config
+		n.IPAM.Addresses = make([]Address, 0, len(n.RuntimeConfig.IPs))
+		for _, addr := range n.RuntimeConfig.IPs {
+			n.IPAM.Addresses = append(n.IPAM.Addresses, Address{AddressStr: addr})
+		}
 	}
 
 	if n.IPAM == nil {
@@ -114,50 +230,6 @@ func LoadIPAMConfig(bytes []byte, envArgs string) (*IPAMConfig, string, error) {
 		} else {
 			n.IPAM.Addresses[i].Version = "6"
 			numV6++
-		}
-	}
-
-	if envArgs != "" {
-		e := IPAMEnvArgs{}
-		err := types.LoadArgs(envArgs, &e)
-		if err != nil {
-			return nil, "", err
-		}
-
-		if e.IP != "" {
-			for _, item := range strings.Split(string(e.IP), ",") {
-				ipstr := strings.TrimSpace(item)
-
-				ip, subnet, err := net.ParseCIDR(ipstr)
-				if err != nil {
-					return nil, "", fmt.Errorf("invalid CIDR %s: %s", ipstr, err)
-				}
-
-				addr := Address{Address: net.IPNet{IP: ip, Mask: subnet.Mask}}
-				if addr.Address.IP.To4() != nil {
-					addr.Version = "4"
-					numV4++
-				} else {
-					addr.Version = "6"
-					numV6++
-				}
-				n.IPAM.Addresses = append(n.IPAM.Addresses, addr)
-			}
-		}
-
-		if e.GATEWAY != "" {
-			for _, item := range strings.Split(string(e.GATEWAY), ",") {
-				gwip := net.ParseIP(strings.TrimSpace(item))
-				if gwip == nil {
-					return nil, "", fmt.Errorf("invalid gateway address: %s", item)
-				}
-
-				for i := range n.IPAM.Addresses {
-					if n.IPAM.Addresses[i].Address.Contains(gwip) {
-						n.IPAM.Addresses[i].Gateway = gwip
-					}
-				}
-			}
 		}
 	}
 

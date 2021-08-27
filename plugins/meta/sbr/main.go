@@ -22,13 +22,15 @@ import (
 	"net"
 
 	"github.com/alexflint/go-filemutex"
+	"github.com/vishvananda/netlink"
+
 	"github.com/containernetworking/cni/pkg/skel"
 	"github.com/containernetworking/cni/pkg/types"
 	"github.com/containernetworking/cni/pkg/types/current"
 	"github.com/containernetworking/cni/pkg/version"
-	"github.com/containernetworking/plugins/pkg/ns"
 
-	"github.com/vishvananda/netlink"
+	"github.com/containernetworking/plugins/pkg/ns"
+	bv "github.com/containernetworking/plugins/pkg/utils/buildversion"
 )
 
 const firstTableID = 100
@@ -235,7 +237,7 @@ func doRoutes(ipCfgs []*current.IPConfig, origRoutes []*types.Route, iface strin
 		if ipCfg.Version == "4" {
 			src.Mask = net.CIDRMask(32, 32)
 		} else {
-			src.Mask = net.CIDRMask(64, 64)
+			src.Mask = net.CIDRMask(128, 128)
 		}
 
 		log.Printf("Source to use %s", src.String())
@@ -256,7 +258,7 @@ func doRoutes(ipCfgs []*current.IPConfig, origRoutes []*types.Route, iface strin
 				dest.Mask = net.CIDRMask(0, 32)
 			} else {
 				dest.IP = net.IPv6zero
-				dest.Mask = net.CIDRMask(0, 64)
+				dest.Mask = net.CIDRMask(0, 128)
 			}
 
 			route := netlink.Route{
@@ -293,6 +295,10 @@ func doRoutes(ipCfgs []*current.IPConfig, origRoutes []*types.Route, iface strin
 		}
 
 		route.Table = table
+
+		// Reset the route flags since if it is dynamically created,
+		// adding it to the new table will fail with "invalid argument"
+		route.Flags = 0
 
 		// We use route replace in case the route already exists, which
 		// is possible for the default gateway we added above.
@@ -370,9 +376,9 @@ RULE_LOOP:
 }
 
 func main() {
-	skel.PluginMain(cmdAdd, cmdGet, cmdDel, version.All, "TODO")
+	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.All, bv.BuildString("sbr"))
 }
 
-func cmdGet(args *skel.CmdArgs) error {
-	return fmt.Errorf("not implemented")
+func cmdCheck(args *skel.CmdArgs) error {
+	return nil
 }

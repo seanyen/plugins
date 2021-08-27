@@ -20,15 +20,17 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/juju/errors"
-
 	"github.com/Microsoft/hcsshim"
+
 	"github.com/containernetworking/cni/pkg/skel"
 	"github.com/containernetworking/cni/pkg/types"
 	"github.com/containernetworking/cni/pkg/types/current"
 	"github.com/containernetworking/cni/pkg/version"
+
+	"github.com/containernetworking/plugins/pkg/errors"
 	"github.com/containernetworking/plugins/pkg/hns"
 	"github.com/containernetworking/plugins/pkg/ipam"
+	bv "github.com/containernetworking/plugins/pkg/utils/buildversion"
 )
 
 type NetConf struct {
@@ -54,6 +56,7 @@ func loadNetConf(bytes []byte) (*NetConf, string, error) {
 }
 
 func cmdAdd(args *skel.CmdArgs) error {
+	success := false
 	n, cniVersion, err := loadNetConf(args.StdinData)
 	if err != nil {
 		return errors.Annotate(err, "error while loadNetConf")
@@ -83,7 +86,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 
 	epName := hns.ConstructEndpointName(args.ContainerID, args.Netns, n.Name)
 
-	hnsEndpoint, err := hns.ProvisionEndpoint(epName, hnsNetwork.Id, args.ContainerID, func() (*hcsshim.HNSEndpoint, error) {
+	hnsEndpoint, err := hns.ProvisionEndpoint(epName, hnsNetwork.Id, args.ContainerID, args.Netns, func() (*hcsshim.HNSEndpoint, error) {
 		// run the IPAM plugin and get back the config to apply
 		r, err := ipam.ExecAdd(n.IPAM.Type, args.StdinData)
 		if err != nil {
@@ -97,12 +100,12 @@ func cmdAdd(args *skel.CmdArgs) error {
 		}
 
 		if len(result.IPs) == 0 {
-			return nil, errors.New("IPAM plugin return is missing IP config")
+			return nil, fmt.Errorf("IPAM plugin return is missing IP config")
 		}
 
 		ipAddr := result.IPs[0].Address.IP.To4()
 		if ipAddr == nil {
-			return nil, errors.New("win-overlay doesn't support IPv6 now")
+			return nil, fmt.Errorf("win-overlay doesn't support IPv6 now")
 		}
 
 		// conjure a MAC based on the IP for Overlay
@@ -114,8 +117,10 @@ func cmdAdd(args *skel.CmdArgs) error {
 			n.ApplyOutboundNatPolicy(hnsNetwork.Subnets[0].AddressPrefix)
 		}
 
-		result.DNS = n.DNS
-
+		result.DNS = n.GetDNS()
+		if n.LoopbackDSR {
+			n.ApplyLoopbackDSR(&ipAddr)
+		}
 		hnsEndpoint := &hcsshim.HNSEndpoint{
 			Name:           epName,
 			VirtualNetwork: hnsNetwork.Id,
@@ -129,6 +134,11 @@ func cmdAdd(args *skel.CmdArgs) error {
 
 		return hnsEndpoint, nil
 	})
+	defer func() {
+		if !success {
+			ipam.ExecDel(n.IPAM.Type, args.StdinData)
+		}
+	}()
 	if err != nil {
 		return errors.Annotatef(err, "error while ProvisionEndpoint(%v,%v,%v)", epName, hnsNetwork.Id, args.ContainerID)
 	}
@@ -138,6 +148,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 		return errors.Annotatef(err, "error while constructResult")
 	}
 
+	success = true
 	return types.PrintResult(result, cniVersion)
 }
 
@@ -156,11 +167,11 @@ func cmdDel(args *skel.CmdArgs) error {
 	return hns.DeprovisionEndpoint(epName, args.Netns, args.ContainerID)
 }
 
-func cmdGet(_ *skel.CmdArgs) error {
+func cmdCheck(_ *skel.CmdArgs) error {
 	// TODO: implement
-	return fmt.Errorf("not implemented")
+	return nil
 }
 
 func main() {
-	skel.PluginMain(cmdAdd, cmdGet, cmdDel, version.All, "TODO")
+	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.PluginSupports("0.1.0", "0.2.0", "0.3.0"), bv.BuildString("win-overlay"))
 }

@@ -1,7 +1,7 @@
 [![Build Status](https://travis-ci.org/containernetworking/plugins.svg?branch=master)](https://travis-ci.org/containernetworking/plugins)
 
 # plugins
-Some CNI network plugins, maintained by the containernetworking team. For more information, see the individual READMEs.
+Some CNI network plugins, maintained by the containernetworking team. For more information, see the [CNI website](https://www.cni.dev).
 
 Read [CONTRIBUTING](CONTRIBUTING.md) for build and test instructions.
 
@@ -28,6 +28,15 @@ Read [CONTRIBUTING](CONTRIBUTING.md) for build and test instructions.
 * `portmap`: An iptables-based portmapping plugin. Maps ports from the host's address space to the container.
 * `bandwidth`: Allows bandwidth-limiting through use of traffic control tbf (ingress/egress).
 * `sbr`: A plugin that configures source based routing for an interface (from which it is chained).
+* `firewall`: A firewall plugin which uses iptables or firewalld to add rules to allow traffic to/from the container.
 
 ### Sample
 The sample plugin provides an example for building your own plugin.
+
+## Contact
+
+For any questions about CNI, please reach out via:
+- Email: [cni-dev](https://groups.google.com/forum/#!forum/cni-dev)
+- Slack: #cni on the [CNCF slack](https://slack.cncf.io/).
+
+If you have a _security_ issue to report, please do so privately to the email addresses listed in the [OWNERS](OWNERS.md) file.

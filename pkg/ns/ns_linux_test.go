@@ -20,6 +20,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/containernetworking/plugins/pkg/testutils"
@@ -118,6 +119,33 @@ var _ = Describe("Linux namespace operations", func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 
+		Context("when called concurrently", func() {
+			It("provides the original namespace as the argument to the callback", func() {
+				concurrency := 200
+				origNS, err := ns.GetCurrentNS()
+				Expect(err).NotTo(HaveOccurred())
+				origNSInode, err := getInodeNS(origNS)
+				Expect(err).NotTo(HaveOccurred())
+
+				var wg sync.WaitGroup
+				wg.Add(concurrency)
+				for i := 0; i < concurrency; i++ {
+					go func() {
+						defer wg.Done()
+						targetNetNS.Do(func(hostNS ns.NetNS) error {
+							defer GinkgoRecover()
+
+							hostNSInode, err := getInodeNS(hostNS)
+							Expect(err).NotTo(HaveOccurred())
+							Expect(hostNSInode).To(Equal(origNSInode))
+							return nil
+						})
+					}()
+				}
+				wg.Wait()
+			})
+		})
+
 		Context("when the callback returns an error", func() {
 			It("restores the calling thread to the original namespace before returning", func() {
 				err := originalNetNS.Do(func(ns.NetNS) error {
@@ -172,7 +200,9 @@ var _ = Describe("Linux namespace operations", func() {
 				By("comparing against the netns inode of every thread in the process")
 				for _, netnsPath := range allNetNSInCurrentProcess() {
 					netnsInode, err := getInode(netnsPath)
-					Expect(err).NotTo(HaveOccurred())
+					if !os.IsNotExist(err) {
+						Expect(err).NotTo(HaveOccurred())
+					}
 					Expect(netnsInode).NotTo(Equal(createdNetNSInode))
 				}
 			})

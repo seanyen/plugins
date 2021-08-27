@@ -2,11 +2,12 @@
 set -xe
 
 SRC_DIR="${SRC_DIR:-$PWD}"
+DOCKER="${DOCKER:-docker}"
 
 TAG=$(git describe --tags --dirty)
 RELEASE_DIR=release-${TAG}
 
-BUILDFLAGS="-ldflags '-extldflags -static -X main._buildVersion=${TAG}'"
+BUILDFLAGS="-ldflags '-extldflags -static -X github.com/containernetworking/plugins/pkg/utils/buildversion.BuildVersion=${TAG}'"
 
 OUTPUT_DIR=bin
 
@@ -15,12 +16,12 @@ rm -Rf ${SRC_DIR}/${RELEASE_DIR}
 mkdir -p ${SRC_DIR}/${RELEASE_DIR}
 mkdir -p ${OUTPUT_DIR}
 
-docker run -v ${SRC_DIR}:/go/src/github.com/containernetworking/plugins --rm golang:1.10-alpine \
+$DOCKER run -ti -v ${SRC_DIR}:/go/src/github.com/containernetworking/plugins --rm golang:1.15-alpine \
 /bin/sh -xe -c "\
     apk --no-cache add bash tar;
     cd /go/src/github.com/containernetworking/plugins; umask 0022;
 
-    for arch in amd64 arm arm64 ppc64le s390x; do \
+    for arch in amd64 arm arm64 ppc64le s390x mips64le; do \
         rm -f ${OUTPUT_DIR}/*; \
         CGO_ENABLED=0 GOARCH=\$arch ./build_linux.sh ${BUILDFLAGS}; \
         for format in tgz; do \

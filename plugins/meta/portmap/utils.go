@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package portmap
 
 import (
-	"crypto/sha512"
 	"fmt"
 	"net"
 	"strconv"
@@ -23,8 +22,6 @@ import (
 
 	"github.com/vishvananda/netlink"
 )
-
-const maxChainNameLength = 28
 
 // fmtIpPort correctly formats ip:port literals for iptables and ip6tables -
 // need to wrap v6 literals in a []
@@ -60,12 +57,6 @@ func getRoutableHostIF(containerIP net.IP) string {
 	}
 
 	return ""
-}
-
-func formatChainName(prefix, name, id string) string {
-	chainBytes := sha512.Sum512([]byte(name + id))
-	chain := fmt.Sprintf("CNI-%s%x", prefix, chainBytes)
-	return chain[:maxChainNameLength]
 }
 
 // groupByProto groups port numbers by protocol

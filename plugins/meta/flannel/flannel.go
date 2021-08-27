@@ -16,7 +16,7 @@
 // the data from flannel generated subnet file and then invokes a plugin
 // like bridge or ipvlan to do the real work.
 
-package main
+package flannel
 
 import (
 	"bufio"
@@ -34,6 +34,8 @@ import (
 	"github.com/containernetworking/cni/pkg/skel"
 	"github.com/containernetworking/cni/pkg/types"
 	"github.com/containernetworking/cni/pkg/version"
+
+	bv "github.com/containernetworking/plugins/pkg/utils/buildversion"
 )
 
 const (
@@ -44,14 +46,19 @@ const (
 type NetConf struct {
 	types.NetConf
 
-	SubnetFile string                 `json:"subnetFile"`
-	DataDir    string                 `json:"dataDir"`
-	Delegate   map[string]interface{} `json:"delegate"`
+	// IPAM field "replaces" that of types.NetConf which is incomplete
+	IPAM          map[string]interface{} `json:"ipam,omitempty"`
+	SubnetFile    string                 `json:"subnetFile"`
+	DataDir       string                 `json:"dataDir"`
+	Delegate      map[string]interface{} `json:"delegate"`
+	RuntimeConfig map[string]interface{} `json:"runtimeConfig,omitempty"`
 }
 
 type subnetEnv struct {
 	nw     *net.IPNet
 	sn     *net.IPNet
+	ip6Nw  *net.IPNet
+	ip6Sn  *net.IPNet
 	mtu    *uint
 	ipmasq *bool
 }
@@ -59,11 +66,11 @@ type subnetEnv struct {
 func (se *subnetEnv) missing() string {
 	m := []string{}
 
-	if se.nw == nil {
-		m = append(m, "FLANNEL_NETWORK")
+	if se.nw == nil && se.ip6Nw == nil {
+		m = append(m, []string{"FLANNEL_NETWORK", "FLANNEL_IPV6_NETWORK"}...)
 	}
-	if se.sn == nil {
-		m = append(m, "FLANNEL_SUBNET")
+	if se.sn == nil && se.ip6Sn == nil {
+		m = append(m, []string{"FLANNEL_SUBNET", "FLANNEL_IPV6_SUBNET"}...)
 	}
 	if se.mtu == nil {
 		m = append(m, "FLANNEL_MTU")
@@ -82,7 +89,20 @@ func loadFlannelNetConf(bytes []byte) (*NetConf, error) {
 	if err := json.Unmarshal(bytes, n); err != nil {
 		return nil, fmt.Errorf("failed to load netconf: %v", err)
 	}
+
 	return n, nil
+}
+
+func getIPAMRoutes(n *NetConf) ([]types.Route, error) {
+	rtes := []types.Route{}
+
+	if n.IPAM != nil && hasKey(n.IPAM, "routes") {
+		buf, _ := json.Marshal(n.IPAM["routes"])
+		if err := json.Unmarshal(buf, &rtes); err != nil {
+			return rtes, fmt.Errorf("failed to parse ipam.routes: %w", err)
+		}
+	}
+	return rtes, nil
 }
 
 func loadFlannelSubnetEnv(fn string) (*subnetEnv, error) {
@@ -106,6 +126,18 @@ func loadFlannelSubnetEnv(fn string) (*subnetEnv, error) {
 
 		case "FLANNEL_SUBNET":
 			_, se.sn, err = net.ParseCIDR(parts[1])
+			if err != nil {
+				return nil, err
+			}
+
+		case "FLANNEL_IPV6_NETWORK":
+			_, se.ip6Nw, err = net.ParseCIDR(parts[1])
+			if err != nil {
+				return nil, err
+			}
+
+		case "FLANNEL_IPV6_SUBNET":
+			_, se.ip6Sn, err = net.ParseCIDR(parts[1])
 			if err != nil {
 				return nil, err
 			}
@@ -142,12 +174,19 @@ func saveScratchNetConf(containerID, dataDir string, netconf []byte) error {
 	return ioutil.WriteFile(path, netconf, 0600)
 }
 
-func consumeScratchNetConf(containerID, dataDir string) ([]byte, error) {
+func consumeScratchNetConf(containerID, dataDir string) (func(error), []byte, error) {
 	path := filepath.Join(dataDir, containerID)
-	// Ignore errors when removing - Per spec safe to continue during DEL
-	defer os.Remove(path)
 
-	return ioutil.ReadFile(path)
+	// cleanup will do clean job when no error happens in consuming/using process
+	cleanup := func(err error) {
+		if err == nil {
+			// Ignore errors when removing - Per spec safe to continue during DEL
+			_ = os.Remove(path)
+		}
+	}
+	netConfBytes, err := ioutil.ReadFile(path)
+
+	return cleanup, netConfBytes, err
 }
 
 func delegateAdd(cid, dataDir string, netconf map[string]interface{}) error {
@@ -204,6 +243,10 @@ func cmdAdd(args *skel.CmdArgs) error {
 		}
 	}
 
+	if n.RuntimeConfig != nil {
+		n.Delegate["runtimeConfig"] = n.RuntimeConfig
+	}
+
 	return doCmdAdd(args, n, fenv)
 }
 
@@ -213,14 +256,21 @@ func cmdDel(args *skel.CmdArgs) error {
 		return err
 	}
 
+	if nc.RuntimeConfig != nil {
+		if nc.Delegate == nil {
+			nc.Delegate = make(map[string]interface{})
+		}
+		nc.Delegate["runtimeConfig"] = nc.RuntimeConfig
+	}
+
 	return doCmdDel(args, nc)
 }
 
-func main() {
-	skel.PluginMain(cmdAdd, cmdGet, cmdDel, version.All, "TODO")
+func Main() {
+	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.All, bv.BuildString("flannel"))
 }
 
-func cmdGet(args *skel.CmdArgs) error {
+func cmdCheck(args *skel.CmdArgs) error {
 	// TODO: implement
-	return fmt.Errorf("not implemented")
+	return nil
 }
