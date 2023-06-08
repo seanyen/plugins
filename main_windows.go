@@ -1,3 +1,6 @@
+//go:build windows
+// +build windows
+
 package main
 
 import (
@@ -6,13 +9,14 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/docker/docker/pkg/reexec"
+
 	"github.com/containernetworking/cni/pkg/version"
 	bv "github.com/containernetworking/plugins/pkg/utils/buildversion"
 	hostlocal "github.com/containernetworking/plugins/plugins/ipam/host-local"
 	"github.com/containernetworking/plugins/plugins/main/windows/win-bridge"
     "github.com/containernetworking/plugins/plugins/main/windows/win-overlay"
 	"github.com/containernetworking/plugins/plugins/meta/flannel"
-	"github.com/docker/docker/pkg/reexec"
 )
 
 func mainEntry() {
