@@ -19,7 +19,7 @@ import (
 	"github.com/containernetworking/plugins/plugins/meta/flannel"
 )
 
-func mainEntry() {
+func main() {
 	os.Args[0] = filepath.Base(os.Args[0])
 	reexec.Register("flannel", flannel.Main)
 	reexec.Register("host-local", hostlocal.Main)

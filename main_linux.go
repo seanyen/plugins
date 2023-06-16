@@ -22,7 +22,7 @@ import (
 	"github.com/containernetworking/plugins/plugins/meta/portmap"
 )
 
-func mainEntry() {
+func main() {
 	os.Args[0] = filepath.Base(os.Args[0])
 	reexec.Register("bandwidth", bandwidth.Main)
 	reexec.Register("bridge", bridge.Main)
